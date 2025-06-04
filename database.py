@@ -80,13 +80,14 @@ def set_card(chat_id: int, username, card_number):
     finally:
         conn.close()
 
-def get_card(chat_id: int, username):
+def get_card(chat_id: int, username: str):
     """
     Get card assigned to user
     """
     conn, cursor = get_db_connection(chat_id)
     try:
-        cursor.execute("SELECT card_number FROM cards WHERE username = ?", username)
+        print(username)
+        cursor.execute("SELECT card_number FROM cards WHERE username = ?", (username,))
         card = cursor.fetchone()
         if card:
             return card
