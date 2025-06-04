@@ -4,4 +4,3 @@ python-dotenv
 Flask
 python-telegram-bot
 pandas
-openpyxl
