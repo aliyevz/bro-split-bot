@@ -234,22 +234,59 @@ app.add_handler(CallbackQueryHandler(button_handler))
 
 # === Запуск Flask-сервера для Replit ===
 
-web_app = Flask('')
+# web_app = Flask('')
 
-@web_app.route('/')
-def health_check():
-    return "BOT OK", 200
+# @web_app.route('/')
+# def health_check():
+#     return "BOT OK", 200
 
 # def run_web():
 #    web_app.run(host='0.0.0.0', port=8080)
 
 # Thread(target=run_web).start()
-def run_web():
-    import os
-    port = int(os.environ.get('PORT', 8080))  # Render задаёт порт через PORT
-    web_app.run(host='0.0.0.0', port=port)
+# def run_web():
+#     import os
+#     port = int(os.environ.get('PORT', 8080))  # Render задаёт порт через PORT
+#     web_app.run(host='0.0.0.0', port=port)
     
+# Thread(target=run_web).start()
+
+# print("✅ Бот запущен...")
+# app.run_polling()
+
+# === Запуск Flask-сервера для Webhook + Render ===
+
+from flask import request
+
+@web_app.route('/')
+def health_check():
+    return "BOT OK", 200
+
+@web_app.route(f'/{TOKEN}', methods=['POST'])
+def receive_update():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put_nowait(update)
+    return 'ok', 200
+
+def run_web():
+    port = int(os.environ.get('PORT', 8080))  # Render задаёт PORT
+    web_app.run(host='0.0.0.0', port=port)
+
+# Установка Webhook
+async def set_webhook():
+    external_url = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+    if not external_url:
+        logging.error("RENDER_EXTERNAL_HOSTNAME не задан")
+        return
+    webhook_url = f"https://{external_url}/{TOKEN}"
+    await app.bot.set_webhook(webhook_url)
+    logging.info(f"✅ Webhook установлен на {webhook_url}")
+
+app.initialize()  # инициализация update_queue
+app.post_init = set_webhook  # Установка webhook после старта
+
+# Запускаем Flask-сервер в отдельном потоке
 Thread(target=run_web).start()
 
-print("✅ Бот запущен...")
-app.run_polling()
+print("✅ Бот запущен через Webhook...")
+
