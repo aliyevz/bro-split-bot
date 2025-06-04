@@ -12,6 +12,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
+web_app = Flask('')
+
 import pandas as pd
 
 # Включаем логирование
