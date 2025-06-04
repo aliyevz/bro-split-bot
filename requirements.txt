@@ -2,3 +2,5 @@ aiogram
 openpyxl
 python-dotenv
 Flask
+python-telegram-bot
+
