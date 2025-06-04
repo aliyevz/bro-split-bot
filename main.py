@@ -237,12 +237,18 @@ app.add_handler(CallbackQueryHandler(button_handler))
 web_app = Flask('')
 
 @web_app.route('/')
-def home():
-    return "Бот активен!"
+def health_check():
+    return "BOT OK", 200
 
+# def run_web():
+#    web_app.run(host='0.0.0.0', port=8080)
+
+# Thread(target=run_web).start()
 def run_web():
-    web_app.run(host='0.0.0.0', port=8080)
-
+    import os
+    port = int(os.environ.get('PORT', 8080))  # Render задаёт порт через PORT
+    web_app.run(host='0.0.0.0', port=port)
+    
 Thread(target=run_web).start()
 
 print("✅ Бот запущен...")
