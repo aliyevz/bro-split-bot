@@ -11,8 +11,12 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
+    Updater,
+    MessageHandler
 )
 import pandas as pd
+
+import database, luhn
 
 # Включаем логирование
 logging.basicConfig(level=logging.INFO)
@@ -21,29 +25,29 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ["BOT_TOKEN"]
 # CHAT_ID = int(os.environ["CHAT_ID"])
 
-# Подключаем SQLite
-conn = sqlite3.connect("debts.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS debts (
-        debtor TEXT,
-        creditor TEXT,
-        amount REAL
-    )
-""")
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS cards (
-        username TEXT PRIMARY KEY,
-        card_number TEXT
-    )
-""")
-conn.commit()
 
 # === Команды ===
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user = update.effective_user
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+
+    database.init_db(chat_id)
+
+    if chat_type in ['group', 'supergroup', 'channel']:
+        await update.message.reply_html(
+            rf"Привет, {user.mention_html()}! Я бот который будет следить за расходами" 
+            rf"в этом чате (**ID: `{chat_id}`**). "
+        )
+    else:  # Приватный чат
+        await update.message.reply_html(
+            rf"Привет, {user.mention_html()}! Я бот который будет следить за расходами"
+        )
+
     keyboard = [
         [InlineKeyboardButton("➕ Добавить расход", callback_data='add')],
+        [InlineKeyboardButton("➕ Добавить payback", callback_data='payback')],
         [InlineKeyboardButton("📊 Баланс братишек пиу", callback_data='balance')],
         [InlineKeyboardButton("📊 Excel", callback_data='excel')],
         [InlineKeyboardButton("🔄 Обнулить все расчеты", callback_data='reset')],
@@ -57,6 +61,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
         args = context.args
         amount = float(args[0])
 
@@ -74,13 +80,13 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         split = round(amount / len(involved), 2)
-
+        batch_debts = []
         for user in involved:
             if user == payer:
                 continue
-            cursor.execute("INSERT INTO debts (debtor, creditor, amount) VALUES (?, ?, ?)",
-                           (user, payer, split))
-        conn.commit()
+            batch_debts.append((user, payer, split))
+
+        database.add_debts_batch(chat_id, batch_debts)
 
         await update.message.reply_text(
             f"{description}: {amount}₼ / {len(involved)} = {split}₼\n"
@@ -92,9 +98,47 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}\nФормат: /add 900 Ужин @user1 @user2")
 
+
+
+async def payback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
+        args = context.args
+        amount = float(args[0])
+
+        mentions = [u.lstrip('@') for u in args if u.startswith('@')]
+        involved = list(set(mentions))
+
+        if not involved:
+            await update.message.reply_text("Укажи кому вернул деньги, Лебовски.")
+            return
+
+        if len(involved) > 1:
+            await update.message.reply_text("Ала, бирь-бирь указывай кому вернул")
+            return
+
+        payer = update.effective_user.username or update.effective_user.first_name
+        amount = round(amount / len(involved), 2)
+        batch_debts = [involved[0], payer, amount]
+
+        database.add_debts_batch(chat_id, batch_debts)
+
+        await update.message.reply_text(
+            f"Payback добавлен. {payer} вернул {involved[0]}  {amount}₼",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 Показать баланс", callback_data='balance')]
+            ])
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}\nФормат: /payback 900 @user1")
+
+
 # Команда для установки / обновления карты
 async def set_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
         card_number = context.args[0]
         username = update.effective_user.username
         if not username:
@@ -105,22 +149,26 @@ async def set_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Номер карты должен быть из 16 цифр.")
             return
 
-        cursor.execute("REPLACE INTO cards (username, card_number) VALUES (?, ?)", (username, card_number))
-        conn.commit()
+        if not luhn.luhn_check(card_number):
+            await update.message.reply_text("Ай брааатишка, Номер карты не валидный!!!!")
+            return
+
+        database.set_card(chat_id, username, card_number)
         await update.message.reply_text("Карта успешно сохранена!")
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}\nИспользуй формат: /setcard 1234567812345678")
 
 # Команда для просмотра карты другого пользователя
 async def get_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+
     if not context.args:
         await update.message.reply_text("Используй: /card @username")
         return
 
     username = context.args[0].lstrip('@')
-    cursor.execute("SELECT card_number FROM cards WHERE username = ?", (username,))
-    card = cursor.fetchone()
-
+    card = database.get_card(chat_id, username)
     if card:
         await update.message.reply_text(f"{card[0]}")
     else:
@@ -128,26 +176,34 @@ async def get_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Обработчики кнопок ===
 
-async def show_balance(message):
-    cursor.execute("SELECT debtor, creditor, SUM(amount) FROM debts GROUP BY debtor, creditor")
-    rows = cursor.fetchall()
+async def show_balance(update: Update, message):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    rows = database.get_debts(chat_id)
     if not rows:
         await message.reply_text("Баланс пуст — братишки рассчитались 🙌")
         return
 
     lines = []
     for debtor, creditor, amount in rows:
-        cursor.execute("SELECT card_number FROM cards WHERE username = ?", (creditor,))
-        card = cursor.fetchone()
-        card_info = card[0] if card else "Карта не указана"
-        lines.append(f"@{debtor} должен @{creditor}: {round(amount, 2)}₼")
+        card = database.get_card(chat_id,creditor)
+        if card:
+            card_info = card
+        else:
+            card_info = "Карта не привязана"
+        lines.append(f"@{debtor} должен @{creditor}: {round(amount, 2)}₼. Карта:{card_info}")
 
     await message.reply_text("📊 Баланс:\n" + "\n".join(lines))
 
-async def reset_debts(message):
-    cursor.execute("DELETE FROM debts")
-    conn.commit()
-    await message.reply_text("Все долги удалены! 🔄")
+async def reset_debts(update: Update, message):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    try:
+        database.reset_debts(chat_id)
+        await message.reply_text("Все долги удалены! 🔄")
+    except Exception as e:
+        await message.reply_text(repr(e))
+
 
 async def show_help(message):
     await message.reply_text(
@@ -161,15 +217,16 @@ async def show_help(message):
         "/help — помощь"
     )
 
-async def send_excel_report(message):
-    cursor.execute("SELECT debtor, creditor, amount FROM debts")
-    rows = cursor.fetchall()
+async def send_excel_report(update: Update, message):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    rows = database.get_all_debts_report(chat_id)
     if not rows:
         await message.reply_text("Нет данных для отчёта.")
         return
 
     df = pd.DataFrame(rows, columns=["Должник", "Кредитор", "Сумма"])
-    excel_file = "report.xlsx"
+    excel_file = str(chat_id) + "report.xlsx"
     df.to_excel(excel_file, index=False)
     await message.reply_document(document=open(excel_file, "rb"))
 
@@ -183,6 +240,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "add":
         await message.reply_text("Введите команду вручную:\n/add 900 Ужин @user1 @user2")
+    elif data == "payback":
+        await message.reply_text("Введите команду вручную:\n/payback 900 @user1")
     elif data == "balance":
         await show_balance(message)
     elif data == "reset":
@@ -220,36 +279,44 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Подключение команд ===
 
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("add", add))
-app.add_handler(CommandHandler("balance", lambda u, c: show_balance(u.message)))
-app.add_handler(CommandHandler("reset", lambda u, c: reset_debts(u.message)))
-app.add_handler(CommandHandler("help", lambda u, c: show_help(u.message)))
-app.add_handler(CommandHandler("setcard", set_card))
-app.add_handler(CommandHandler("card", get_card))
-app.add_handler(CommandHandler("report_excel", lambda u, c: send_excel_report(u.message)))
-app.add_handler(CallbackQueryHandler(button_handler))
-# app.post_init = set_weekly_job # Запуск напоминалки для Семы
+def main():
+    # === Запуск Flask-сервера для Replit ===
+    web_app = Flask('')
 
-# === Запуск Flask-сервера для Replit ===
+    @web_app.route('/')
+    def health_check():
+        return "BOT OK", 200
 
-web_app = Flask('')
+    # def run_web():
+    #    web_app.run(host='0.0.0.0', port=8080)
 
-@web_app.route('/')
-def health_check():
-    return "BOT OK", 200
+    # Thread(target=run_web).start()
+    def run_web():
+        import os
+        port = int(os.environ.get('PORT', 8080))  # Render задаёт порт через PORT
+        web_app.run(host='0.0.0.0', port=port)
 
-# def run_web():
-#    web_app.run(host='0.0.0.0', port=8080)
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("add", lambda u, c: add(u.message, c)))
+    app.add_handler(CommandHandler("payback", lambda u, c: payback(u.message, c)))
+    app.add_handler(CommandHandler("balance", lambda u, c: show_balance(u.message, c)))
+    app.add_handler(CommandHandler("reset", lambda u, c: reset_debts(u.message, c)))
+    app.add_handler(CommandHandler("help", lambda u, c: show_help(u.message)))
+    app.add_handler(CommandHandler("setcard", lambda u, c: set_card(u.message, c)))
+    app.add_handler(CommandHandler("card", lambda u, c: get_card(u.message, c)))
+    app.add_handler(CommandHandler("report_excel", lambda u, c: send_excel_report(u.message, c)))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    # app.post_init = set_weekly_job # Запуск напоминалки для Семы
 
-# Thread(target=run_web).start()
-def run_web():
-    import os
-    port = int(os.environ.get('PORT', 8080))  # Render задаёт порт через PORT
-    web_app.run(host='0.0.0.0', port=port)
+    Thread(target=run_web).start()
+
+    print("✅ Бот запущен...")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
+
+
     
-Thread(target=run_web).start()
 
-print("✅ Бот запущен...")
-app.run_polling()
