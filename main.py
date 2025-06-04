@@ -44,7 +44,7 @@ conn.commit()
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("➕ Добавить расход", callback_data='add')],
-        [InlineKeyboardButton("📊 Баланс братишек", callback_data='balance')],
+        [InlineKeyboardButton("📊 Баланс братишек пиу", callback_data='balance')],
         [InlineKeyboardButton("📊 Excel", callback_data='excel')],
         [InlineKeyboardButton("🔄 Обнулить все расчеты", callback_data='reset')],
         [InlineKeyboardButton("ℹ Помощь братишкам", callback_data='help')],
